@@ -1,0 +1,526 @@
+loadstring(game:HttpGet("https://pastebin.com/raw/eWaEP9qz",true))()
+
+wait (0.555)
+
+-- Load the custom library
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Pro-byte-afk/UiLibraryForPro-Bye-30-Not-Noob-30/main/kpLzpNXc%20(3).txt",true))()
+
+local Window = Library:CreateWindow("Sax.lol | BETA", Vector2.new(400, 300), Enum.KeyCode.RightShift)
+
+-- Create Tabs
+local Tab1 = Window:CreateTab("Main")
+local Tab2 = Window:CreateTab("Settings")
+
+-- Variables
+local LocalPlayer = game.Players.LocalPlayer
+local CamlockState = false
+local TriggerBotEnabled = false
+local SilentAimEnabled = true
+local Smoothing = 0.65
+local JumpOffset = 0.09
+local FallOffset = 0
+local TriggerBotTolerance = 10
+
+-- Silent Aim Settings
+getgenv().HitPart = "HumanoidRootPart"
+getgenv().SilentPrediction = 0.155
+getgenv().Enabled = true
+getgenv().Resolver = true
+getgenv().VerticalPrediction = 0.5
+
+-- FOV settings
+getgenv().ShowFOV = true
+getgenv().Filled = false
+getgenv().FOVSize = 275
+getgenv().FOVTransparency = 0.1
+getgenv().FOVThickness = 0.1
+getgenv().FOVColor = Color3.new(1, 0, 0)
+
+local SilentAimFOVCircle = Drawing.new("Circle")
+SilentAimFOVCircle.Color = getgenv().FOVColor
+SilentAimFOVCircle.Visible = getgenv().ShowFOV
+SilentAimFOVCircle.Filled = getgenv().Filled
+SilentAimFOVCircle.Radius = getgenv().FOVSize
+SilentAimFOVCircle.Transparency = getgenv().FOVTransparency
+SilentAimFOVCircle.Thickness = getgenv().FOVThickness
+
+-- Function to update FOV Size
+local function updateFOVSize(value)
+    local newSize = tonumber(value)
+    if newSize then
+        getgenv().FOVSize = newSize
+        SilentAimFOVCircle.Radius = newSize
+        SendNotification("saxx.lol", "FOV Size set to " .. newSize)
+    else
+        SendNotification("saxx.lol", "Invalid FOV Size")
+    end
+end
+
+-- Function to find the nearest enemy
+local function FindNearestEnemy()
+    local closestDistance, closestPlayer = math.huge, nil
+    local centerPosition = Vector2.new(
+        game:GetService("GuiService"):GetScreenResolution().X / 2,
+        game:GetService("GuiService"):GetScreenResolution().Y / 2
+    )
+
+    for _, player in ipairs(game.Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local character = player.Character
+            if character and character:FindFirstChild("HumanoidRootPart") and character.Humanoid.Health > 0 then
+                local position, isVisibleOnViewport = 
+                    game:GetService("Workspace").CurrentCamera:WorldToViewportPoint(character.HumanoidRootPart.Position)
+
+                if isVisibleOnViewport then
+                    local distance = (centerPosition - Vector2.new(position.X, position.Y)).Magnitude
+                    if distance < closestDistance then
+                        closestPlayer = character
+                        closestDistance = distance
+                    end
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+-- Global variables to track highlight and wall check visibility
+getgenv().ShowHighlight = false
+getgenv().EnableWallCheck = true  -- Default to enable wall check
+
+-- Function to check if a player is dead
+local function isPlayerDead(player)
+    if player.Character and player.Character:FindFirstChild("BodyEffects") then
+        local bodyEffects = player.Character.BodyEffects
+        local ko = bodyEffects:FindFirstChild("K.O") or bodyEffects:FindFirstChild("KO")
+        return ko and ko.Value
+    end
+    return false
+end
+
+-- Function to highlight a player
+local function highlightPlayer(player)
+    local char = player.Character
+    if char and not char:FindFirstChild("Highlight") then
+        local highlight = Instance.new("BillboardGui")
+        highlight.Name = "Highlight"
+        highlight.Parent = char
+        highlight.Size = UDim2.new(0, 10, 0, 10)  -- Fixed size
+        highlight.Adornee = char.HumanoidRootPart
+        highlight.AlwaysOnTop = true
+        highlight.StudsOffset = Vector3.new(0, 2, 0)  -- Offset to ensure visibility
+
+        local frameBackground = Instance.new("Frame")
+        frameBackground.Size = UDim2.new(1, 0, 1, 0)
+        frameBackground.BackgroundColor3 = Color3.new(0, 0, 0)  -- Black outline
+        frameBackground.BackgroundTransparency = 0.5
+        frameBackground.Parent = highlight
+
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, -2, 1, -2)  -- Slightly smaller to fit inside the black outline
+        frame.Position = UDim2.new(0, 1, 0, 1)
+        frame.BackgroundColor3 = Color3.new(1, 0, 0)  -- Red color
+        frame.BackgroundTransparency = 0.5
+        frame.Parent = highlight
+    end
+end
+
+-- Function to remove all highlights
+local function removeAllHighlights()
+    for _, player in ipairs(game.Players:GetPlayers()) do
+        if player.Character and player.Character:FindFirstChild("Highlight") then
+            player.Character.Highlight:Destroy()
+        end
+    end
+end
+
+-- Function to check if a ray to the player is obstructed
+local function isRayObstructed(player)
+    local playerRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+    if not playerRootPart then return true end
+
+    local rayOrigin = workspace.CurrentCamera.CFrame.p
+    local rayDirection = (playerRootPart.Position - rayOrigin).unit
+    local rayLength = (playerRootPart.Position - rayOrigin).magnitude
+    local ray = Ray.new(rayOrigin, rayDirection * rayLength)
+
+    local hit, hitPosition = workspace:FindPartOnRay(ray, LocalPlayer.Character)
+
+    return hit and not hit:IsDescendantOf(player.Character)
+end
+
+-- Function to get the closest player to the center of the screen, excluding players behind walls and dead players
+local function getClosestPlayerToCenter()
+    local centerScreenPosition = Vector2.new(workspace.CurrentCamera.ViewportSize.X / 2, workspace.CurrentCamera.ViewportSize.Y / 2 - (game:GetService("GuiService"):GetGuiInset().Y / 2))
+    local closestPlayer
+    local closestDistance = math.huge
+
+    -- Remove previous highlights if highlight is off
+    if not getgenv().ShowHighlight then
+        removeAllHighlights()
+    end
+
+    for _, player in ipairs(game.Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and not isPlayerDead(player) then
+            local playerRootPart = player.Character.HumanoidRootPart
+            local screenPosition, onScreen = workspace.CurrentCamera:WorldToViewportPoint(playerRootPart.Position)
+
+            -- Check if the player is on screen
+            if onScreen and (not getgenv().EnableWallCheck or not isRayObstructed(player)) then
+                local distance = (centerScreenPosition - Vector2.new(screenPosition.X, screenPosition.Y)).Magnitude
+                if distance < closestDistance and distance <= SilentAimFOVCircle.Radius then
+                    closestPlayer = player
+                    closestDistance = distance
+                end
+            end
+        end
+    end
+
+    -- Highlight the closest player if highlight is on
+    if getgenv().ShowHighlight then
+        -- Remove previous highlights first
+        removeAllHighlights()
+        
+        if closestPlayer then
+            highlightPlayer(closestPlayer)
+        end
+    end
+
+    return closestPlayer
+end
+
+
+local SilentTarget = nil
+
+-- Update Silent Aim Target and FOV Circle Position
+game:GetService("RunService").RenderStepped:Connect(function()
+    SilentTarget = getClosestPlayerToCenter()
+    SilentAimFOVCircle.Position = Vector2.new(workspace.CurrentCamera.ViewportSize.X / 2, workspace.CurrentCamera.ViewportSize.Y / 2 - (game:GetService("GuiService"):GetGuiInset().Y / 2))
+end)
+
+-- Game-specific RemoteEvents
+local game_support = {
+    [2788229376] = { Remote = "MainEvent", Argument = "UpdateMousePosI" },
+    [12238627497] = { Remote = "MainEvent", Argument = "UpdateMousePos" },
+    [5602055394] = { Remote = "MAINEVENT", Argument = "MousePos" },
+    [17403265390] = { Remote = "MAINEVENT", Argument = "MOUSE" },
+    [17403166075] = { Remote = "MAINEVENT", Argument = "MOUSE" },
+    [18111448661] = { Remote = "MAINEVENT", Argument = "MOUSE" },
+    [15186202290] = { Remote = "MAINEVENT", Argument = "MOUSE" },
+    [11143225577] = { Remote = "MAINEVENT", Argument = "UpdateMousePos" },
+    [15763494605] = { Remote = "MAINEVENT", Argument = "MOUSE" },
+   [125825216602676] = { Remote = "MAINEVENT", Argument = "MOUSE" },
+ [15166543806] = { Remote = "MAINEVENT", Argument = "MoonUpdateMousePos" },
+    [17897702920] = { Remote = "MainEvent", Argument = "UpdateMousePos" },
+    [16033173781] = { Remote = "MainEvent", Argument = "UpdateMousePos1" },
+    [7213786345] = { Remote = "MainEvent", Argument = "UpdateMousePosI" },
+    [9825515356] = { Remote = "MainEvent", Argument = "MousePosUpdate" },
+    [16859411452] = { Remote = "MainEvent", Argument = "UpdateMousePos" },
+    [14277620939] = { Remote = "MainEvent", Argument = "UpdateMousePos" }
+}
+
+-- Determine the appropriate RemoteEvent name and argument
+local function getRemoteInfo()
+    local placeId = game.PlaceId
+    return game_support[placeId] or { Remote = "MainEvent", Argument = "UpdateMousePos" }
+end
+
+local remoteInfo = getRemoteInfo()
+local mt = getrawmetatable(game)
+local old = mt.__namecall
+setreadonly(mt, false)
+mt.__namecall = newcclosure(function(...)
+    local args = {...}
+    if getgenv().Enabled and SilentTarget and SilentTarget.Character and getnamecallmethod() == "FireServer" and args[2] == remoteInfo.Argument then
+        local targetPart = SilentTarget.Character[getgenv().HitPart]
+        local targetPosition = targetPart.Position
+        local targetVelocity = targetPart.Velocity
+        
+        -- Determine if the player is in the air
+        local isAirborne = targetPart.Position.Y > SilentTarget.Character.HumanoidRootPart.Position.Y + 1
+        
+        -- Adjust prediction based on airborne status
+        if isAirborne then
+            -- Prioritize vertical prediction when airborne
+            args[3] = targetPosition + Vector3.new(0, targetVelocity.Y * getgenv().VerticalPrediction, 0)
+        else
+            -- Standard prediction with both horizontal and vertical components
+            args[3] = targetPosition + (targetVelocity * getgenv().SilentPrediction) + Vector3.new(0, targetVelocity.Y * getgenv().VerticalPrediction, 0)
+        end
+        
+        return old(unpack(args))
+    end
+    return old(...)
+end)
+setreadonly(mt, true)
+
+-- Function to send notifications
+local function SendNotification(title, text)
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = title,
+        Text = text,
+        Duration = 2 -- Duration in seconds
+    })
+end
+
+local CameraLockSection = Tab1:CreateSector("Camera Lock", "left")
+
+CameraLockSection:AddButton("Launch Camlock", function()
+    local camlockTool = LocalPlayer.Backpack:FindFirstChild("CamlockTool")
+    if not camlockTool then
+        camlockTool = Instance.new("Tool")
+        camlockTool.Name = "CamlockTool"
+        camlockTool.RequiresHandle = false
+        camlockTool.Parent = LocalPlayer.Backpack
+    end
+
+    camlockTool.Activated:Connect(function()
+        CamlockState = not CamlockState
+
+        if CamlockState then
+            enemy = FindNearestEnemy()
+            SendNotification("saxx.lol", "CamLock ON")
+        else
+            enemy = nil
+            SendNotification("saxx.lol", "CamLock OFF")
+        end
+    end)
+end)
+
+local CameraLockSettingsSection = Tab1:CreateSector("Camera Lock Settings", "left")
+CameraLockSettingsSection:AddTextbox("Smoothing", "0.65", function(value)
+    Smoothing = tonumber(value) or 0.65
+end)
+CameraLockSettingsSection:AddTextbox("Jump Offset", "0.09", function(value)
+    JumpOffset = tonumber(value) or 0.09
+end)
+CameraLockSettingsSection:AddTextbox("Fall Offset", "0", function(value)
+    FallOffset = tonumber(value) or 0
+end)
+CameraLockSettingsSection:AddTextbox("Trigger Tolerance", "10", function(value)
+    TriggerBotTolerance = tonumber(value) or 10
+end)
+CameraLockSettingsSection:AddTextbox("Prediction", "0.14664", function(value)
+    getgenv().CamlockPrediction = tonumber(value) or 0.14664
+end)
+
+local SilentAimSection = Tab1:CreateSector("Silent Aim", "right")
+
+SilentAimSection:AddToggle("Silent Aim Enabled", SilentAimEnabled, function(value)
+    getgenv().Enabled = value
+    SendNotification("saxx.lol", "Silent Aim " .. (value and "Enabled" or "Disabled"))
+end)
+
+-- Textbox for Silent Aim Prediction
+SilentAimSection:AddTextbox("Horizontal Prediction", "0.155", function(value)
+    getgenv().SilentPrediction = tonumber(value) or 0.155
+end)
+
+-- Textbox for Silent Aim Prediction
+SilentAimSection:AddTextbox("Vertical Prediction", "0.15", function(value)
+    getgenv().VerticalPrediction = tonumber(value) or 0.15
+end)
+
+
+
+SilentAimSection:AddDropdown("Hit Part", {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"}, "HumanoidRootPart", function(option)
+    getgenv().HitPart = option
+    SendNotification("saxx.lol", "Hit Part set to " .. option)
+end)
+
+SilentAimSection:AddToggle("Show FOV", getgenv().ShowFOV, function(value)
+    getgenv().ShowFOV = value
+    SilentAimFOVCircle.Visible = value
+    SendNotification("saxx.lol", "FOV Circle " .. (value and "Visible" or "Hidden"))
+end)
+
+SilentAimSection:AddTextbox("FOV Size", tostring(getgenv().FOVSize), function(value)
+    updateFOVSize(value)
+end)
+
+-- RunService Heartbeat Connection for Camlock Functionality
+game:GetService("RunService").Heartbeat:Connect(function()
+    if CamlockState and enemy then
+        local camera = workspace.CurrentCamera
+        local targetPosition = enemy.HumanoidRootPart.Position + Vector3.new(0, JumpOffset, 0) + enemy.HumanoidRootPart.Velocity * getgenv().CamlockPrediction
+        local fallAdjustedPosition = targetPosition - Vector3.new(0, FallOffset, 0) -- Adjust target position for fall offset
+        local targetCFrame = CFrame.new(camera.CFrame.p, fallAdjustedPosition)
+ 
+        -- Smoothly interpolate the camera's CFrame towards the targetCFrame
+        camera.CFrame = camera.CFrame:Lerp(targetCFrame, Smoothing)
+ 
+        -- Ensure the shooting tool is equipped and active
+        local shootingTool = LocalPlayer.Backpack:FindFirstChild("ShootingToolName") -- Replace "ShootingToolName" with the actual name of your shooting tool
+        if shootingTool then
+            LocalPlayer.Character.Humanoid:EquipTool(shootingTool)
+ 
+            -- Activate the tool if trigger bot is enabled and crosshair is on target
+            if TriggerBotEnabled and IsCrosshairOnTarget() then
+                shootingTool:Activate()
+            end
+        end
+    end
+end)
+
+
+-- Variable to track the state of the CFrame speed toggle
+local cframeSpeedToggle = false
+
+-- Function to handle CFrame speed toggling
+local function handleCFrameSpeedToggle()
+    cframeSpeedToggle = not cframeSpeedToggle
+    if cframeSpeedToggle then
+        getgenv().cframespeedtoggle = true
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "CFrame Speed",
+            Text = "Enabled"
+        })
+    else
+        getgenv().cframespeedtoggle = false
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "CFrame Speed",
+            Text = "Disabled"
+        })
+    end
+end
+
+-- CFrame Speed Toggle Button Section
+local CFrameSpeedSection = Tab2:CreateSector("CFrame Speed", "right")
+CFrameSpeedSection:AddButton("Toggle CFrame Speed", function()
+    handleCFrameSpeedToggle()
+end)
+
+
+CFrameSpeedSection:AddTextbox("Speed Value", "Enter speed value", function(text)
+    local number = tonumber(text)
+    if number then
+        getgenv().speedvalue = number
+    end
+end)
+
+-- Clean up existing scripts
+for _, v in pairs(game.Players.LocalPlayer.Character:GetChildren()) do
+    if v:IsA("Script") and v.Name ~= "Health" and v.Name ~= "Sound" and v:FindFirstChild("LocalScript") then
+        v:Destroy()
+    end
+end
+
+-- Connect to CharacterAdded to handle new scripts
+game.Players.LocalPlayer.CharacterAdded:Connect(function(char)
+    repeat
+        wait()
+    until game.Players.LocalPlayer.Character
+    char.ChildAdded:Connect(function(child)
+        if child:IsA("Script") then 
+            wait(0.1)
+            if child:FindFirstChild("LocalScript") then
+                child.LocalScript:FireServer()
+            end
+        end
+    end)
+end)
+
+-- Function to toggle Anti Aim (Velocity Manipulation) feature
+local function toggleAntiAim(enabled)
+    getgenv().velocityManipulationToggle = enabled
+    if enabled then
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Anti Aim",
+            Text = "Enabled"
+        })
+    else
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Anti Aim",
+            Text = "Disabled"
+        })
+    end
+end
+
+-- Connect velocity manipulation loop
+game:GetService("RunService").Heartbeat:Connect(function()
+    if getgenv().velocityManipulationToggle then
+        local player = game.Players.LocalPlayer
+        local humanoidRootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if humanoidRootPart then
+            local vel = humanoidRootPart.Velocity
+            humanoidRootPart.Velocity = Vector3.new(0, 250, 0)
+            game:GetService("RunService").RenderStepped:Wait()
+            humanoidRootPart.Velocity = vel
+        end
+    end
+end)
+
+
+-- Anti Aim Sector
+local AntiAimSection = Tab2:CreateSector("Anti Aim", "right")
+AntiAimSection:AddToggle("Toggle Anti Aim", false, function(value)
+    toggleAntiAim(value)
+end)
+
+
+-- Heartbeat connection for CFrame speed adjustment
+game:GetService("RunService").Heartbeat:Connect(function()
+    if getgenv().cframespeedtoggle then
+        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
+            game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame +
+            game.Players.LocalPlayer.Character.Humanoid.MoveDirection * getgenv().speedvalue / 0.5
+    end
+end)
+
+
+--  toggle button for highlighting
+SilentAimSection:AddToggle("Show Highlight", getgenv().ShowHighlight, function(value)
+    getgenv().ShowHighlight = value
+    SendNotification("saxx.lol", "Highlight " .. (value and "Enabled" or "Disabled"))
+end)
+
+
+-- toggle button for wall check
+SilentAimSection:AddToggle("Enable Wall Check", getgenv().EnableWallCheck, function(value)
+    getgenv().EnableWallCheck = value
+    SendNotification("saxx.lol", "Wall Check " .. (value and "Enabled" or "Disabled"))
+end)
+
+
+local OldPredictionY = getgenv().SilentPrediction
+local function GetVelocity(closestPlayer, HumanoidRootpart)
+    if player and player.Character then
+        local velocity = player.Character[part].Velocity
+        if velocity.Y < -30 and getgenv().Resolver then
+            getgenv().SharpSSilent.Prediction = 0
+            return velocity
+        elseif velocity.Magnitude > 50 and getgenv().Resolver then
+            return player.Character:FindFirstChild("Humanoid").MoveDirection * 16
+        else
+            getgenv().SilentPrediction = OldPredictionY
+            return velocity
+        end
+    end
+    return Vector3.new(0, 0, 0)
+end
+
+-- Create the Teleport section on the left side of Tab2
+local TeleportSection = Tab2:CreateSector("Teleport", "left")
+
+-- Define the CFrame values excluding "Admin Base", "Food", and "Flank"
+local CFrameValues = {
+    ["High Medium Armor"] = CFrame.new(-934.73651123047, -28.492471694946, 565.99884033203),
+    ["Gas Station"] = CFrame.new(608.599426, 65.3087997, -267.643066),
+    ["School"] = CFrame.new(-581.790283, 68.4947281, 331.046448),
+    ["Military"] = CFrame.new(92.643799, 122.749977, -860.128784),
+    ["Ufo"] = CFrame.new(65.1504517, 138.999954, -691.819031),
+    ["Bank"] = CFrame.new(-374.538391, 102.052887, -440.20871),
+    ["Gym Top"] = CFrame.new(-76.178093, 56.6998138, -629.940979),
+    ["Casino"] = CFrame.new(-1048.95093, 110.254997, -154.554016),
+    ["Uphill"] = CFrame.new(485.651947, 112.5, -644.316833),
+    ["Revolver"] = CFrame.new(-659.053162, 110.748001, -158.224365),
+    ["PlayGround"] = CFrame.new(-260.836182, 126.424866, -877.783875),
+}
+
+-- Create buttons for each CFrame location
+for name, cframe in pairs(CFrameValues) do
+    TeleportSection:AddButton(name, function()
+        -- Function to set the player's CFrame to the selected value
+        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = cframe
+    end)
+end
